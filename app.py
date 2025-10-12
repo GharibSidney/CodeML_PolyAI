@@ -7,6 +7,74 @@ from collections import deque
 import threading
 import time
 import os
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class EmotionCNN(nn.Module):
+    def __init__(self, num_classes=7):
+        super(EmotionCNN, self).__init__()
+        # Block 1
+        self.conv1_1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
+        self.bn1_1 = nn.BatchNorm2d(32)
+        self.conv1_2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.bn1_2 = nn.BatchNorm2d(32)
+        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.dropout1 = nn.Dropout(0.25)
+        
+        # Block 2
+        self.conv2_1 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.bn2_1 = nn.BatchNorm2d(64)
+        self.conv2_2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.bn2_2 = nn.BatchNorm2d(64)
+        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.dropout2 = nn.Dropout(0.25)
+        
+        # Block 3
+        self.conv3_1 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.bn3_1 = nn.BatchNorm2d(128)
+        self.conv3_2 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
+        self.bn3_2 = nn.BatchNorm2d(128)
+        self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.dropout3 = nn.Dropout(0.25)
+        
+        # Fully connected layers
+        # After 3 pooling layers: 48 -> 24 -> 12 -> 6
+        self.fc1 = nn.Linear(128 * 6 * 6, 256)
+        self.bn_fc = nn.BatchNorm1d(256)
+        self.dropout_fc = nn.Dropout(0.5)
+        self.fc2 = nn.Linear(256, num_classes)
+    
+    def forward(self, x):
+        # Block 1
+        x = F.relu(self.bn1_1(self.conv1_1(x)))
+        x = F.relu(self.bn1_2(self.conv1_2(x)))
+        x = self.pool1(x)
+        x = self.dropout1(x)
+        
+        # Block 2
+        x = F.relu(self.bn2_1(self.conv2_1(x)))
+        x = F.relu(self.bn2_2(self.conv2_2(x)))
+        x = self.pool2(x)
+        x = self.dropout2(x)
+        
+        # Block 3
+        x = F.relu(self.bn3_1(self.conv3_1(x)))
+        x = F.relu(self.bn3_2(self.conv3_2(x)))
+        x = self.pool3(x)
+        x = self.dropout3(x)
+        
+        # Flatten
+        x = x.view(x.size(0), -1)
+        
+        # Fully connected layers
+        x = F.relu(self.bn_fc(self.fc1(x)))
+        x = self.dropout_fc(x)
+        x = self.fc2(x)
+        
+        return x
+
 
 class EmotionDetectorApp:
     def __init__(self, root):
@@ -16,8 +84,10 @@ class EmotionDetectorApp:
         self.root.configure(bg='#f5f7fa')
         
         # ==========================================
-        # CONFIGUREZ VOS IMAGES ICI
+        # CONFIGUREZ VOS CHEMINS ICI
         # ==========================================
+        self.model_path = 'emotion_emotionCNN_final.pth'  # Chemin vers votre modèle .pth
+        
         self.emotion_image_paths = {
             'Colère': 'images/colere.png',
             'Dégoût': 'images/degout.png',
@@ -33,7 +103,10 @@ class EmotionDetectorApp:
         self.is_running = False
         self.cap = None
         self.current_emotion = "Neutre"
+        
+        # IMPORTANT: Assurez-vous que l'ordre correspond à votre modèle entraîné
         self.emotions = ['Colère', 'Dégoût', 'Peur', 'Joie', 'Tristesse', 'Surprise', 'Neutre']
+        
         self.emotion_colors = {
             'Colère': '#ef4444',
             'Dégoût': '#8b5cf6',
@@ -48,6 +121,14 @@ class EmotionDetectorApp:
         # Dictionary to store loaded images
         self.emotion_images = {}
         
+        # Detect device (GPU if available)
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print(f"Using device: {self.device}")
+        
+        # Load the PyTorch model
+        self.model = None
+        self.load_model()
+        
         # Charger le détecteur de visage Haar Cascade
         try:
             self.face_cascade = cv2.CascadeClassifier(
@@ -60,6 +141,49 @@ class EmotionDetectorApp:
         self.load_emotion_images()
         
         self.setup_ui()
+    
+    def load_model(self):
+        """Load the trained PyTorch model"""
+        try:
+            if not os.path.exists(self.model_path):
+                messagebox.showwarning(
+                    "Attention", 
+                    f"Modèle introuvable: {self.model_path}\n\nLe mode simulation sera utilisé."
+                )
+                print("Mode simulation activé - aucun modèle chargé")
+                return
+            
+            # Initialize model
+            self.model = EmotionCNN()
+            
+            # Load the trained weights
+            checkpoint = torch.load(self.model_path, map_location=self.device)
+            
+            # Handle different checkpoint formats
+            if isinstance(checkpoint, dict):
+                if 'model_state_dict' in checkpoint:
+                    self.model.load_state_dict(checkpoint['model_state_dict'])
+                elif 'state_dict' in checkpoint:
+                    self.model.load_state_dict(checkpoint['state_dict'])
+                else:
+                    self.model.load_state_dict(checkpoint)
+            else:
+                self.model.load_state_dict(checkpoint)
+            
+            # Move model to device and set to evaluation mode
+            self.model.to(self.device)
+            self.model.eval()
+            
+            print(f"✓ Modèle chargé avec succès depuis {self.model_path}")
+            messagebox.showinfo("Succès", "Modèle PyTorch chargé avec succès!")
+            
+        except Exception as e:
+            messagebox.showerror(
+                "Erreur", 
+                f"Erreur lors du chargement du modèle:\n{str(e)}\n\nLe mode simulation sera utilisé."
+            )
+            print(f"Erreur de chargement: {str(e)}")
+            self.model = None
         
     def load_emotion_images(self):
         """Load all emotion images from the specified paths"""
@@ -240,6 +364,19 @@ class EmotionDetectorApp:
         )
         self.stop_button.pack(side=tk.LEFT, padx=8)
         
+        # Model status indicator
+        model_status = "Modèle: Chargé" if self.model is not None else "Modèle: Simulation"
+        model_color = '#10b981' if self.model is not None else '#f59e0b'
+        
+        self.model_status_label = tk.Label(
+            button_container,
+            text=model_status,
+            font=('Segoe UI', 9),
+            bg='#ffffff',
+            fg=model_color
+        )
+        self.model_status_label.pack(side=tk.LEFT, padx=15)
+        
         self.status_label = tk.Label(
             button_container,
             text="Prêt",
@@ -268,25 +405,60 @@ class EmotionDetectorApp:
             )
         
     def preprocess_face(self, face_img):
-        """Prétraiter l'image du visage pour le modèle"""
+        """Prétraiter l'image du visage pour le modèle PyTorch"""
+        # Resize to model input size (48x48)
         face_img = cv2.resize(face_img, (48, 48))
+        
+        # Convert to grayscale if needed
         if len(face_img.shape) == 3:
             face_img = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
+        
+        # Normalize to [0, 1]
         face_img = face_img / 255.0
-        face_img = np.expand_dims(face_img, axis=0)
-        face_img = np.expand_dims(face_img, axis=-1)
-        return face_img
+        
+        # Convert to PyTorch tensor
+        face_tensor = torch.from_numpy(face_img).float()
+        
+        # Add batch and channel dimensions: (1, 1, 48, 48)
+        face_tensor = face_tensor.unsqueeze(0).unsqueeze(0)
+        
+        return face_tensor
     
     def predict_emotion(self, face_img):
         """Prédire l'émotion à partir d'une image de visage"""
-        # Simulation de prédictions (REMPLACEZ PAR VOTRE MODÈLE)
-        np.random.seed(int(time.time() * 1000) % 2**32)
-        probs = np.random.dirichlet(np.ones(7) * 5)
-        predictions = dict(zip(self.emotions, probs))
         
-        emotion = max(predictions, key=predictions.get)
+        # If model not loaded, use simulation
+        if self.model is None:
+            np.random.seed(int(time.time() * 1000) % 2**32)
+            probs = np.random.dirichlet(np.ones(7) * 5)
+            predictions = dict(zip(self.emotions, probs))
+            emotion = max(predictions, key=predictions.get)
+            return emotion, predictions
         
-        return emotion, predictions
+        try:
+            # Preprocess the face image
+            face_tensor = self.preprocess_face(face_img)
+            face_tensor = face_tensor.to(self.device)
+            
+            # Make prediction
+            with torch.no_grad():
+                outputs = self.model(face_tensor)
+                probabilities = F.softmax(outputs, dim=1)
+                probs = probabilities.cpu().numpy()[0]
+            
+            # Create predictions dictionary
+            predictions = dict(zip(self.emotions, probs))
+            
+            # Get the emotion with highest probability
+            emotion = max(predictions, key=predictions.get)
+            
+            return emotion, predictions
+            
+        except Exception as e:
+            print(f"Erreur de prédiction: {str(e)}")
+            # Fallback to neutral
+            predictions = {emotion: 1.0/7 for emotion in self.emotions}
+            return 'Neutre', predictions
     
     def update_probabilities(self, probabilities):
         """Mettre à jour l'affichage des probabilités"""
@@ -377,6 +549,7 @@ class EmotionDetectorApp:
         self.update_probabilities(probabilities)
         self.display_emotion_image(emotion)
 
+
 def main():
     root = tk.Tk()
     app = EmotionDetectorApp(root)
@@ -387,6 +560,7 @@ def main():
     
     root.protocol("WM_DELETE_WINDOW", on_closing)
     root.mainloop()
+
 
 if __name__ == "__main__":
     main()
