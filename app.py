@@ -102,14 +102,13 @@ class EmotionDetectorApp:
         self.cap = None
         self.current_emotion = "Neutre"
         
-        # IMPORTANT: Assurez-vous que l'ordre correspond à votre modèle entraîné
-        self.emotions = ['Colère', 'Dégoût', 'Peur', 'Joie', 'Tristesse', 'Surprise', 'Neutre']
+        self.emotions = ['Colère', 'Dégoût', 'Peur', 'Joie', "Neutre", 'Tristesse', 'Surprise' ]
         
         self.emotion_colors = {
             'Colère': '#ef4444',
             'Dégoût': '#8b5cf6',
-            'Peur': '#64748b',
-            'Joie': '#f59e0b',
+            'Peur': "#ffaf02",
+            'Joie': "#bbef00",
             'Tristesse': '#3b82f6',
             'Surprise': '#10b981',
             'Neutre': '#6b7280'
