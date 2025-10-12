@@ -86,7 +86,7 @@ class EmotionDetectorApp:
         # ==========================================
         # CONFIGUREZ VOS CHEMINS ICI
         # ==========================================
-        self.model_path = 'emotion_emotionCNN_final.pth'  # Chemin vers votre modèle .pth
+        self.model_path = 'emotionCNN.pth'  # Chemin vers votre modèle .pth
         
         self.emotion_image_paths = {
             'Colère': 'images/colere.png',
