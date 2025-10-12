@@ -1,0 +1,15 @@
+# Core dependencies
+opencv-python==4.8.1.78
+Pillow==10.1.0
+numpy==1.24.3
+torch==2.1.0
+torchvision==0.16.0
+
+# Optional: For CUDA support (GPU acceleration)
+# Uncomment the lines below if you have an NVIDIA GPU
+# torch==2.1.0+cu118
+# torchvision==0.16.0+cu118
+# --extra-index-url https://download.pytorch.org/whl/cu118
+
+# GUI (included with Python, but listed for completeness)
+# tkinter - comes pre-installed with Python

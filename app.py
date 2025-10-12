@@ -6,31 +6,127 @@ import numpy as np
 from collections import deque
 import threading
 import time
+import os
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class EmotionCNN(nn.Module):
+    def __init__(self, num_classes=7):
+        super(EmotionCNN, self).__init__()
+        # Block 1
+        self.conv1_1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
+        self.bn1_1 = nn.BatchNorm2d(32)
+        self.conv1_2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.bn1_2 = nn.BatchNorm2d(32)
+        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.dropout1 = nn.Dropout(0.25)
+        
+        # Block 2
+        self.conv2_1 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.bn2_1 = nn.BatchNorm2d(64)
+        self.conv2_2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.bn2_2 = nn.BatchNorm2d(64)
+        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.dropout2 = nn.Dropout(0.25)
+        
+        # Block 3
+        self.conv3_1 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.bn3_1 = nn.BatchNorm2d(128)
+        self.conv3_2 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
+        self.bn3_2 = nn.BatchNorm2d(128)
+        self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.dropout3 = nn.Dropout(0.25)
+        
+        # Fully connected layers
+        # After 3 pooling layers: 48 -> 24 -> 12 -> 6
+        self.fc1 = nn.Linear(128 * 6 * 6, 256)
+        self.bn_fc = nn.BatchNorm1d(256)
+        self.dropout_fc = nn.Dropout(0.5)
+        self.fc2 = nn.Linear(256, num_classes)
+    
+    def forward(self, x):
+        # Block 1
+        x = F.relu(self.bn1_1(self.conv1_1(x)))
+        x = F.relu(self.bn1_2(self.conv1_2(x)))
+        x = self.pool1(x)
+        x = self.dropout1(x)
+        
+        # Block 2
+        x = F.relu(self.bn2_1(self.conv2_1(x)))
+        x = F.relu(self.bn2_2(self.conv2_2(x)))
+        x = self.pool2(x)
+        x = self.dropout2(x)
+        
+        # Block 3
+        x = F.relu(self.bn3_1(self.conv3_1(x)))
+        x = F.relu(self.bn3_2(self.conv3_2(x)))
+        x = self.pool3(x)
+        x = self.dropout3(x)
+        
+        # Flatten
+        x = x.view(x.size(0), -1)
+        
+        # Fully connected layers
+        x = F.relu(self.bn_fc(self.fc1(x)))
+        x = self.dropout_fc(x)
+        x = self.fc2(x)
+        
+        return x
+
 
 class EmotionDetectorApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Détecteur d'Émotions en Temps Réel")
+        self.root.title("Détecteur d'Émotions")
         self.root.geometry("1200x700")
-        self.root.configure(bg='#1e1e2e')
+        self.root.configure(bg='#f5f7fa')
+        
+    
+        self.model_path = 'emotionCNN.pth'  
+        
+        self.emotion_image_paths = {
+            'Colère': 'images/colere.png',
+            'Dégoût': 'images/degout.png',
+            'Peur': 'images/peur.png',
+            'Joie': 'images/joie.png',
+            'Tristesse': 'images/tristesse.png',
+            'Surprise': 'images/surprise.png',
+            'Neutre': 'images/neutre.png'
+        }
+        
         
         # Variables
         self.is_running = False
         self.cap = None
         self.current_emotion = "Neutre"
+        
+        # IMPORTANT: Assurez-vous que l'ordre correspond à votre modèle entraîné
         self.emotions = ['Colère', 'Dégoût', 'Peur', 'Joie', 'Tristesse', 'Surprise', 'Neutre']
+        
         self.emotion_colors = {
-            'Colère': '#e74c3c',
-            'Dégoût': '#9b59b6',
-            'Peur': '#34495e',
-            'Joie': '#f39c12',
-            'Tristesse': '#3498db',
-            'Surprise': '#1abc9c',
-            'Neutre': '#95a5a6'
+            'Colère': '#ef4444',
+            'Dégoût': '#8b5cf6',
+            'Peur': '#64748b',
+            'Joie': '#f59e0b',
+            'Tristesse': '#3b82f6',
+            'Surprise': '#10b981',
+            'Neutre': '#6b7280'
         }
         self.emotion_history = deque(maxlen=50)
         
-        # Charger le détecteur de visage Haar Cascade
+        # Dictionary to store loaded images
+        self.emotion_images = {}
+        
+        # Detect device (GPU if available)
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print(f"Using device: {self.device}")
+        
+        # Load the PyTorch model
+        self.model = None
+        self.load_model()
+       
         try:
             self.face_cascade = cv2.CascadeClassifier(
                 cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
@@ -38,263 +134,332 @@ class EmotionDetectorApp:
         except:
             messagebox.showerror("Erreur", "Impossible de charger le détecteur de visage")
         
+        # Load emotion images
+        self.load_emotion_images()
+        
         self.setup_ui()
+    
+    def load_model(self):
+        """Load the trained PyTorch model"""
+        try:
+            if not os.path.exists(self.model_path):
+                messagebox.showwarning(
+                    "Attention", 
+                    f"Modèle introuvable: {self.model_path}\n\nLe mode simulation sera utilisé."
+                )
+                print("Mode simulation activé - aucun modèle chargé")
+                return
+            
+            # Initialize model
+            self.model = EmotionCNN()
+            
+            # Load the trained weights
+            checkpoint = torch.load(self.model_path, map_location=self.device)
+            
+            # Handle different checkpoint formats
+            if isinstance(checkpoint, dict):
+                if 'model_state_dict' in checkpoint:
+                    self.model.load_state_dict(checkpoint['model_state_dict'])
+                elif 'state_dict' in checkpoint:
+                    self.model.load_state_dict(checkpoint['state_dict'])
+                else:
+                    self.model.load_state_dict(checkpoint)
+            else:
+                self.model.load_state_dict(checkpoint)
+            
+        
+            self.model.to(self.device)
+            self.model.eval()
+            
+            print(f"✓ Modèle chargé avec succès depuis {self.model_path}")
+            messagebox.showinfo("Succès", "Modèle PyTorch chargé avec succès!")
+            
+        except Exception as e:
+            messagebox.showerror(
+                "Erreur", 
+                f"Erreur lors du chargement du modèle:\n{str(e)}\n\nLe mode simulation sera utilisé."
+            )
+            print(f"Erreur de chargement: {str(e)}")
+            self.model = None
+        
+    def load_emotion_images(self):
+        """Load all emotion images from the specified paths"""
+        missing_images = []
+        
+        for emotion, path in self.emotion_image_paths.items():
+            if os.path.exists(path):
+                try:
+                    img = Image.open(path)
+                    img.thumbnail((250, 400), Image.Resampling.LANCZOS)
+                    photo = ImageTk.PhotoImage(img)
+                    self.emotion_images[emotion] = photo
+                except Exception as e:
+                    missing_images.append(f"{emotion}: {str(e)}")
+            else:
+                missing_images.append(f"{emotion}: fichier introuvable ({path})")
+        
+        if missing_images:
+            error_msg = "Images manquantes ou erreurs:\n\n" + "\n".join(missing_images)
+            messagebox.showwarning("Attention", error_msg)
         
     def setup_ui(self):
-        # En-tête
-        header_frame = tk.Frame(self.root, bg='#2d2d44', height=60)
-        header_frame.pack(fill=tk.X, pady=(0, 10))
+       
+        header_frame = tk.Frame(self.root, bg='#ffffff', height=70)
+        header_frame.pack(fill=tk.X)
         header_frame.pack_propagate(False)
         
         title_label = tk.Label(
             header_frame, 
-            text="🎭 Détecteur d'Émotions par IA",
-            font=('Helvetica', 20, 'bold'),
-            bg='#2d2d44',
-            fg='#ffffff'
+            text="Détecteur d'Émotions",
+            font=('Segoe UI', 24, 'bold'),
+            bg='#ffffff',
+            fg='#1f2937'
         )
-        title_label.pack(pady=15)
+        title_label.pack(pady=20)
         
-        # Frame principal
-        main_frame = tk.Frame(self.root, bg='#1e1e2e')
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+        # Frame principal avec padding
+        main_frame = tk.Frame(self.root, bg='#f5f7fa')
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=30, pady=20)
         
-        # Frame gauche - Vidéo
-        left_frame = tk.Frame(main_frame, bg='#2d2d44', relief=tk.RAISED, bd=2)
-        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
-        
-        video_label = tk.Label(left_frame, text="Vidéo", font=('Helvetica', 12), 
-                              bg='#2d2d44', fg='#ffffff')
-        video_label.pack(pady=5)
+        # Frame gauche - Vidéo (plus large)
+        left_frame = tk.Frame(main_frame, bg='#ffffff', relief=tk.FLAT, bd=0)
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 15))
         
         self.video_canvas = tk.Label(left_frame, bg='#000000')
-        self.video_canvas.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+        self.video_canvas.pack(padx=15, pady=15, fill=tk.BOTH, expand=True)
         
-        # Frame droit - Informations
-        right_frame = tk.Frame(main_frame, bg='#2d2d44', relief=tk.RAISED, bd=2, width=350)
-        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=(10, 0))
+        # Frame droit - Informations compactes
+        right_frame = tk.Frame(main_frame, bg='#ffffff', relief=tk.FLAT, bd=0, width=320)
+        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH)
         right_frame.pack_propagate(False)
         
-        # Émotion actuelle
-        emotion_frame = tk.Frame(right_frame, bg='#2d2d44')
-        emotion_frame.pack(pady=20, padx=15, fill=tk.X)
+        # Émotion actuelle 
+        emotion_container = tk.Frame(right_frame, bg='#ffffff')
+        emotion_container.pack(pady=25, padx=20, fill=tk.X)
         
         tk.Label(
-            emotion_frame,
+            emotion_container,
             text="Émotion Détectée",
-            font=('Helvetica', 14, 'bold'),
-            bg='#2d2d44',
-            fg='#ffffff'
+            font=('Segoe UI', 11),
+            bg='#ffffff',
+            fg='#6b7280'
         ).pack()
         
         self.emotion_label = tk.Label(
-            emotion_frame,
+            emotion_container,
             text="Neutre",
-            font=('Helvetica', 32, 'bold'),
-            bg='#2d2d44',
-            fg='#95a5a6'
+            font=('Segoe UI', 36, 'bold'),
+            bg='#ffffff',
+            fg='#6b7280'
         )
-        self.emotion_label.pack(pady=10)
+        self.emotion_label.pack(pady=5)
         
-        # Canvas pour le graphique circulaire
-        self.graph_canvas = tk.Canvas(
-            right_frame,
-            width=300,
-            height=300,
-            bg='#2d2d44',
-            highlightthickness=0
+        # Image de l'émotion (compacte)
+        image_container = tk.Frame(right_frame, bg='#f9fafb', relief=tk.FLAT, bd=0)
+        image_container.pack(pady=10, padx=20, fill=tk.BOTH, expand=True)
+        
+        self.emotion_image_canvas = tk.Label(
+            image_container, 
+            bg='#f9fafb',
+            text="",
+            font=('Segoe UI', 10),
+            fg='#9ca3af'
         )
-        self.graph_canvas.pack(pady=20)
+        self.emotion_image_canvas.pack(padx=15, pady=15, fill=tk.BOTH, expand=True)
         
-        # Probabilités des émotions
-        prob_frame = tk.Frame(right_frame, bg='#2d2d44')
-        prob_frame.pack(pady=10, padx=15, fill=tk.BOTH, expand=True)
+        
+        if 'Neutre' in self.emotion_images:
+            self.display_emotion_image('Neutre')
+        
+        prob_frame = tk.Frame(right_frame, bg='#ffffff')
+        prob_frame.pack(pady=20, padx=20, fill=tk.X)
         
         tk.Label(
             prob_frame,
             text="Probabilités",
-            font=('Helvetica', 12, 'bold'),
-            bg='#2d2d44',
-            fg='#ffffff'
-        ).pack(pady=(0, 10))
+            font=('Segoe UI', 11, 'bold'),
+            bg='#ffffff',
+            fg='#1f2937'
+        ).pack(pady=(0, 15), anchor='w')
         
         self.prob_labels = {}
         self.prob_bars = {}
         
         for emotion in self.emotions:
-            emotion_row = tk.Frame(prob_frame, bg='#2d2d44')
-            emotion_row.pack(fill=tk.X, pady=3)
+            emotion_row = tk.Frame(prob_frame, bg='#ffffff')
+            emotion_row.pack(fill=tk.X, pady=5)
             
             label = tk.Label(
                 emotion_row,
                 text=emotion,
-                font=('Helvetica', 9),
-                bg='#2d2d44',
-                fg='#ffffff',
-                width=10,
+                font=('Segoe UI', 9),
+                bg='#ffffff',
+                fg='#374151',
+                width=9,
                 anchor='w'
             )
             label.pack(side=tk.LEFT)
             
-            bar_frame = tk.Frame(emotion_row, bg='#1e1e2e', height=15)
-            bar_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+            bar_bg = tk.Frame(emotion_row, bg='#e5e7eb', height=8)
+            bar_bg.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 8))
             
-            bar = tk.Frame(bar_frame, bg=self.emotion_colors[emotion], height=15)
+            bar = tk.Frame(bar_bg, bg=self.emotion_colors[emotion], height=8)
             bar.place(x=0, y=0, relwidth=0, relheight=1)
             self.prob_bars[emotion] = bar
             
             prob_label = tk.Label(
                 emotion_row,
                 text="0%",
-                font=('Helvetica', 9),
-                bg='#2d2d44',
-                fg='#ffffff',
-                width=5
+                font=('Segoe UI', 9, 'bold'),
+                bg='#ffffff',
+                fg='#6b7280',
+                width=4
             )
             prob_label.pack(side=tk.RIGHT)
             self.prob_labels[emotion] = prob_label
         
-        # Frame des contrôles
-        control_frame = tk.Frame(self.root, bg='#2d2d44', height=80)
-        control_frame.pack(fill=tk.X, padx=20, pady=(10, 20))
+        
+        control_frame = tk.Frame(self.root, bg='#ffffff', height=80)
+        control_frame.pack(fill=tk.X, side=tk.BOTTOM)
         control_frame.pack_propagate(False)
         
-        button_frame = tk.Frame(control_frame, bg='#2d2d44')
-        button_frame.pack(expand=True)
+       
+        tk.Frame(control_frame, bg='#e5e7eb', height=1).pack(fill=tk.X)
+        
+        button_container = tk.Frame(control_frame, bg='#ffffff')
+        button_container.pack(expand=True)
         
         self.start_button = tk.Button(
-            button_frame,
-            text="▶ Démarrer",
+            button_container,
+            text="Démarrer",
             command=self.start_detection,
-            font=('Helvetica', 12, 'bold'),
-            bg='#27ae60',
+            font=('Segoe UI', 11, 'bold'),
+            bg='#10b981',
             fg='white',
-            width=15,
-            height=2,
-            relief=tk.FLAT,
-            cursor='hand2'
-        )
-        self.start_button.pack(side=tk.LEFT, padx=10)
-        
-        self.stop_button = tk.Button(
-            button_frame,
-            text="⬛ Arrêter",
-            command=self.stop_detection,
-            font=('Helvetica', 12, 'bold'),
-            bg='#e74c3c',
-            fg='white',
-            width=15,
-            height=2,
+            width=14,
+            height=1,
             relief=tk.FLAT,
             cursor='hand2',
-            state=tk.DISABLED
+            bd=0
         )
-        self.stop_button.pack(side=tk.LEFT, padx=10)
+        self.start_button.pack(side=tk.LEFT, padx=8)
+        
+        self.stop_button = tk.Button(
+            button_container,
+            text="Arrêter",
+            command=self.stop_detection,
+            font=('Segoe UI', 11, 'bold'),
+            bg='#ef4444',
+            fg='white',
+            width=14,
+            height=1,
+            relief=tk.FLAT,
+            cursor='hand2',
+            state=tk.DISABLED,
+            bd=0
+        )
+        self.stop_button.pack(side=tk.LEFT, padx=8)
+        
+        # Model status indicator
+        model_status = "Modèle: Chargé" if self.model is not None else "Modèle: Simulation"
+        model_color = '#10b981' if self.model is not None else '#f59e0b'
+        
+        self.model_status_label = tk.Label(
+            button_container,
+            text=model_status,
+            font=('Segoe UI', 9),
+            bg='#ffffff',
+            fg=model_color
+        )
+        self.model_status_label.pack(side=tk.LEFT, padx=15)
         
         self.status_label = tk.Label(
-            control_frame,
-            text="● Prêt",
-            font=('Helvetica', 10),
-            bg='#2d2d44',
-            fg='#95a5a6'
+            button_container,
+            text="Prêt",
+            font=('Segoe UI', 10),
+            bg='#ffffff',
+            fg='#6b7280'
         )
-        self.status_label.pack(pady=5)
+        self.status_label.pack(side=tk.LEFT, padx=15)
+    
+    def display_emotion_image(self, emotion):
+        """Display the image associated with the detected emotion"""
+        if emotion in self.emotion_images:
+            self.emotion_image_canvas.config(
+                image=self.emotion_images[emotion],
+                text='',
+                bg='#f9fafb'
+            )
+            self.emotion_image_canvas.image = self.emotion_images[emotion]
+        else:
+            self.emotion_image_canvas.config(
+                image='',
+                text=f"Image non disponible",
+                font=('Segoe UI', 10),
+                fg='#9ca3af',
+                bg='#f9fafb'
+            )
         
     def preprocess_face(self, face_img):
-        """
-        Prétraiter l'image du visage pour le modèle
-        MODIFIEZ CETTE FONCTION selon les besoins de votre modèle
-        """
-        # Redimensionner à 48x48 (taille commune pour les modèles d'émotions)
+        """Prétraiter l'image du visage pour le modèle PyTorch"""
+        # Resize to model input size (48x48)
         face_img = cv2.resize(face_img, (48, 48))
-        # Convertir en niveaux de gris si nécessaire
+        
+        # Convert to grayscale if needed
         if len(face_img.shape) == 3:
             face_img = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
-        # Normaliser
+        
+        # Normalize to [0, 1]
         face_img = face_img / 255.0
-        # Ajouter les dimensions pour le batch et le channel
-        face_img = np.expand_dims(face_img, axis=0)
-        face_img = np.expand_dims(face_img, axis=-1)
-        return face_img
+        
+        # Convert to PyTorch tensor
+        face_tensor = torch.from_numpy(face_img).float()
+        
+        # Add batch and channel dimensions: (1, 1, 48, 48)
+        face_tensor = face_tensor.unsqueeze(0).unsqueeze(0)
+        
+        return face_tensor
     
     def predict_emotion(self, face_img):
-        """
-        Prédire l'émotion à partir d'une image de visage
-        REMPLACEZ CETTE FONCTION par votre modèle d'IA
+        """Prédire l'émotion à partir d'une image de visage"""
         
-        Args:
-            face_img: Image du visage (numpy array)
+        # If model not loaded, use simulation
+        if self.model is None:
+            np.random.seed(int(time.time() * 1000) % 2**32)
+            probs = np.random.dirichlet(np.ones(7) * 5)
+            predictions = dict(zip(self.emotions, probs))
+            emotion = max(predictions, key=predictions.get)
+            return emotion, predictions
+        
+        try:
+            # Preprocess the face image
+            face_tensor = self.preprocess_face(face_img)
+            face_tensor = face_tensor.to(self.device)
             
-        Returns:
-            tuple: (emotion_name, probabilities_dict)
-        """
-        # EXEMPLE: Remplacez cette simulation par votre modèle réel
-        # processed_face = self.preprocess_face(face_img)
-        # predictions = your_model.predict(processed_face)[0]
-        
-        # Simulation de prédictions (REMPLACEZ PAR VOTRE MODÈLE)
-        np.random.seed(int(time.time() * 1000) % 2**32)
-        probs = np.random.dirichlet(np.ones(7) * 5)
-        predictions = dict(zip(self.emotions, probs))
-        
-        # Trouver l'émotion dominante
-        emotion = max(predictions, key=predictions.get)
-        
-        return emotion, predictions
-    
-    def draw_emotion_graph(self, probabilities):
-        """Dessiner un graphique circulaire des probabilités"""
-        self.graph_canvas.delete("all")
-        
-        center_x, center_y = 150, 150
-        radius = 80
-        
-        # Dessiner le cercle de fond
-        self.graph_canvas.create_oval(
-            center_x - radius, center_y - radius,
-            center_x + radius, center_y + radius,
-            fill='#1e1e2e', outline='#3d3d5c', width=2
-        )
-        
-        # Dessiner les segments pour chaque émotion
-        start_angle = 0
-        for emotion in self.emotions:
-            prob = probabilities.get(emotion, 0)
-            extent = prob * 360
+            # Make prediction
+            with torch.no_grad():
+                outputs = self.model(face_tensor)
+                probabilities = F.softmax(outputs, dim=1)
+                probs = probabilities.cpu().numpy()[0]
             
-            if prob > 0.01:  # Afficher seulement si significatif
-                self.graph_canvas.create_arc(
-                    center_x - radius, center_y - radius,
-                    center_x + radius, center_y + radius,
-                    start=start_angle, extent=extent,
-                    fill=self.emotion_colors[emotion], outline='#2d2d44', width=2
-                )
-            start_angle += extent
-        
-        # Cercle central
-        inner_radius = 50
-        self.graph_canvas.create_oval(
-            center_x - inner_radius, center_y - inner_radius,
-            center_x + inner_radius, center_y + inner_radius,
-            fill='#2d2d44', outline='#3d3d5c', width=2
-        )
-        
-        # Texte central
-        max_emotion = max(probabilities, key=probabilities.get)
-        max_prob = probabilities[max_emotion]
-        self.graph_canvas.create_text(
-            center_x, center_y,
-            text=f"{int(max_prob * 100)}%",
-            font=('Helvetica', 18, 'bold'),
-            fill='#ffffff'
-        )
+            # Create predictions dictionary
+            predictions = dict(zip(self.emotions, probs))
+            
+            # Get the emotion with highest probability
+            emotion = max(predictions, key=predictions.get)
+            
+            return emotion, predictions
+            
+        except Exception as e:
+            print(f"Erreur de prédiction: {str(e)}")
+       
+            predictions = {emotion: 1.0/7 for emotion in self.emotions}
+            return 'Neutre', predictions
     
     def update_probabilities(self, probabilities):
         """Mettre à jour l'affichage des probabilités"""
         for emotion, prob in probabilities.items():
-            # Mettre à jour la barre
             self.prob_bars[emotion].place(relwidth=prob)
-            # Mettre à jour le texte
             self.prob_labels[emotion].config(text=f"{int(prob * 100)}%")
     
     def start_detection(self):
@@ -306,11 +471,10 @@ class EmotionDetectorApp:
                 return
             
             self.is_running = True
-            self.start_button.config(state=tk.DISABLED)
+            self.start_button.config(state=tk.DISABLED, bg='#9ca3af')
             self.stop_button.config(state=tk.NORMAL)
-            self.status_label.config(text="● En cours...", fg='#27ae60')
+            self.status_label.config(text="En cours...", fg='#10b981')
             
-            # Démarrer le thread de détection
             self.detection_thread = threading.Thread(target=self.detection_loop, daemon=True)
             self.detection_thread.start()
             
@@ -323,9 +487,9 @@ class EmotionDetectorApp:
         if self.cap:
             self.cap.release()
         
-        self.start_button.config(state=tk.NORMAL)
-        self.stop_button.config(state=tk.DISABLED)
-        self.status_label.config(text="● Arrêté", fg='#e74c3c')
+        self.start_button.config(state=tk.NORMAL, bg='#10b981')
+        self.stop_button.config(state=tk.DISABLED, bg='#9ca3af')
+        self.status_label.config(text="Arrêté", fg='#ef4444')
         self.video_canvas.config(image='')
     
     def detection_loop(self):
@@ -335,50 +499,36 @@ class EmotionDetectorApp:
             if not ret:
                 break
             
-            # Retourner l'image horizontalement
             frame = cv2.flip(frame, 1)
-            
-            # Convertir en niveaux de gris pour la détection de visage
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             
-            # Détecter les visages
             faces = self.face_cascade.detectMultiScale(
                 gray, scaleFactor=1.1, minNeighbors=5, minSize=(48, 48)
             )
             
-            # Traiter chaque visage détecté
             for (x, y, w, h) in faces:
-                # Extraire le visage
                 face_roi = gray[y:y+h, x:x+w]
-                
-                # Prédire l'émotion
                 emotion, probabilities = self.predict_emotion(face_roi)
                 
-                # Dessiner le rectangle autour du visage
                 color = self.emotion_colors.get(emotion, '#ffffff')
-                # Convertir couleur hex en BGR
                 color_bgr = tuple(int(color.lstrip('#')[i:i+2], 16) for i in (4, 2, 0))
                 cv2.rectangle(frame, (x, y), (x+w, y+h), color_bgr, 3)
                 
-                # Afficher l'émotion
                 cv2.putText(
                     frame, emotion, (x, y-10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.9, color_bgr, 2
                 )
                 
-                # Mettre à jour l'interface (dans le thread principal)
                 self.root.after(0, self.update_emotion_display, emotion, probabilities)
             
-            # Convertir pour Tkinter
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(frame_rgb)
             img = img.resize((640, 480), Image.Resampling.LANCZOS)
             photo = ImageTk.PhotoImage(image=img)
             
-            # Mettre à jour l'affichage vidéo
             self.root.after(0, self.update_video, photo)
             
-            time.sleep(0.03)  # ~30 FPS
+            time.sleep(0.03)
     
     def update_video(self, photo):
         """Mettre à jour l'affichage vidéo"""
@@ -387,24 +537,26 @@ class EmotionDetectorApp:
     
     def update_emotion_display(self, emotion, probabilities):
         """Mettre à jour l'affichage de l'émotion"""
+        self.current_emotion = emotion
         self.emotion_label.config(
             text=emotion,
-            fg=self.emotion_colors.get(emotion, '#ffffff')
+            fg=self.emotion_colors.get(emotion, '#6b7280')
         )
         self.update_probabilities(probabilities)
-        self.draw_emotion_graph(probabilities)
+        self.display_emotion_image(emotion)
+
 
 def main():
     root = tk.Tk()
     app = EmotionDetectorApp(root)
     
-    # Gérer la fermeture de la fenêtre
     def on_closing():
         app.stop_detection()
         root.destroy()
     
     root.protocol("WM_DELETE_WINDOW", on_closing)
     root.mainloop()
+
 
 if __name__ == "__main__":
     main()
