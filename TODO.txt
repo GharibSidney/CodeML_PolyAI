@@ -1,3 +1,4 @@
+augmentation de données
 scale new dataset to 48x48
 greyscale them
 when we do prediction grey scale image
