@@ -108,7 +108,7 @@ class EmotionDetectorApp:
             'Colère': '#ef4444',
             'Dégoût': '#8b5cf6',
             'Peur': "#ffaf02",
-            'Joie': "#bbef00",
+            'Joie': "#eeff00",
             'Tristesse': '#3b82f6',
             'Surprise': '#10b981',
             'Neutre': '#6b7280'
@@ -167,7 +167,7 @@ class EmotionDetectorApp:
             self.model.eval()
             
             print(f"✓ Modèle chargé avec succès depuis {self.model_path}")
-            messagebox.showinfo("Succès", "Modèle PyTorch chargé avec succès!")
+            # messagebox.showinfo("Succès", "Modèle PyTorch chargé avec succès!")
             
         except Exception as e:
             messagebox.showerror(
@@ -198,7 +198,11 @@ class EmotionDetectorApp:
             messagebox.showwarning("Attention", error_msg)
         
     def setup_ui(self):
-       
+       # Set window to fullscreen
+        self.root.attributes('-fullscreen', True)
+        
+        # Optional: Add escape key binding to exit fullscreen
+        self.root.bind('<Escape>', lambda e: self.root.attributes('-fullscreen', False))
         header_frame = tk.Frame(self.root, bg='#ffffff', height=70)
         header_frame.pack(fill=tk.X)
         header_frame.pack_propagate(False)
