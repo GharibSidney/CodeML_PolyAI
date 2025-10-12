@@ -83,10 +83,8 @@ class EmotionDetectorApp:
         self.root.geometry("1200x700")
         self.root.configure(bg='#f5f7fa')
         
-        # ==========================================
-        # CONFIGUREZ VOS CHEMINS ICI
-        # ==========================================
-        self.model_path = 'emotionCNN.pth'  # Chemin vers votre modèle .pth
+    
+        self.model_path = 'emotionCNN.pth'  
         
         self.emotion_image_paths = {
             'Colère': 'images/colere.png',
@@ -97,7 +95,7 @@ class EmotionDetectorApp:
             'Surprise': 'images/surprise.png',
             'Neutre': 'images/neutre.png'
         }
-        # ==========================================
+        
         
         # Variables
         self.is_running = False
@@ -128,8 +126,7 @@ class EmotionDetectorApp:
         # Load the PyTorch model
         self.model = None
         self.load_model()
-        
-        # Charger le détecteur de visage Haar Cascade
+       
         try:
             self.face_cascade = cv2.CascadeClassifier(
                 cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
@@ -170,7 +167,7 @@ class EmotionDetectorApp:
             else:
                 self.model.load_state_dict(checkpoint)
             
-            # Move model to device and set to evaluation mode
+        
             self.model.to(self.device)
             self.model.eval()
             
@@ -206,7 +203,7 @@ class EmotionDetectorApp:
             messagebox.showwarning("Attention", error_msg)
         
     def setup_ui(self):
-        # En-tête simple
+       
         header_frame = tk.Frame(self.root, bg='#ffffff', height=70)
         header_frame.pack(fill=tk.X)
         header_frame.pack_propagate(False)
@@ -236,7 +233,7 @@ class EmotionDetectorApp:
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH)
         right_frame.pack_propagate(False)
         
-        # Émotion actuelle (plus proéminente)
+        # Émotion actuelle 
         emotion_container = tk.Frame(right_frame, bg='#ffffff')
         emotion_container.pack(pady=25, padx=20, fill=tk.X)
         
@@ -270,11 +267,10 @@ class EmotionDetectorApp:
         )
         self.emotion_image_canvas.pack(padx=15, pady=15, fill=tk.BOTH, expand=True)
         
-        # Display initial neutral emotion image
+        
         if 'Neutre' in self.emotion_images:
             self.display_emotion_image('Neutre')
         
-        # Probabilités simplifiées (top 3 uniquement)
         prob_frame = tk.Frame(right_frame, bg='#ffffff')
         prob_frame.pack(pady=20, padx=20, fill=tk.X)
         
@@ -322,12 +318,12 @@ class EmotionDetectorApp:
             prob_label.pack(side=tk.RIGHT)
             self.prob_labels[emotion] = prob_label
         
-        # Contrôles (footer simplifié)
+        
         control_frame = tk.Frame(self.root, bg='#ffffff', height=80)
         control_frame.pack(fill=tk.X, side=tk.BOTTOM)
         control_frame.pack_propagate(False)
         
-        # Ligne de séparation subtile
+       
         tk.Frame(control_frame, bg='#e5e7eb', height=1).pack(fill=tk.X)
         
         button_container = tk.Frame(control_frame, bg='#ffffff')
@@ -456,7 +452,7 @@ class EmotionDetectorApp:
             
         except Exception as e:
             print(f"Erreur de prédiction: {str(e)}")
-            # Fallback to neutral
+       
             predictions = {emotion: 1.0/7 for emotion in self.emotions}
             return 'Neutre', predictions
     
