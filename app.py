@@ -115,7 +115,6 @@ class EmotionDetectorApp:
         }
         self.emotion_history = deque(maxlen=50)
         
-        # Dictionary to store loaded images
         self.emotion_images = {}
         
         # Detect device (GPU if available)
@@ -133,7 +132,6 @@ class EmotionDetectorApp:
         except:
             messagebox.showerror("Erreur", "Impossible de charger le détecteur de visage")
         
-        # Load emotion images
         self.load_emotion_images()
         
         self.setup_ui()
@@ -149,10 +147,8 @@ class EmotionDetectorApp:
                 print("Mode simulation activé - aucun modèle chargé")
                 return
             
-            # Initialize model
             self.model = EmotionCNN()
             
-            # Load the trained weights
             checkpoint = torch.load(self.model_path, map_location=self.device)
             
             # Handle different checkpoint formats
@@ -253,7 +249,6 @@ class EmotionDetectorApp:
         )
         self.emotion_label.pack(pady=5)
         
-        # Image de l'émotion (compacte)
         image_container = tk.Frame(right_frame, bg='#f9fafb', relief=tk.FLAT, bd=0)
         image_container.pack(pady=10, padx=20, fill=tk.BOTH, expand=True)
         
