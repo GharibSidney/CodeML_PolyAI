@@ -1,4 +1,6 @@
 train
 test
 expressionsCodeML.zip
-.pth*
+*.pth
+trials
+*.pkl
